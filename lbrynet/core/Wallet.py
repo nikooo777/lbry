@@ -108,9 +108,10 @@ class Wallet(object):
     def _clean_bad_records(self):
         self._storage.clean_bad_records()
 
-    def _save_name_metadata(self, name, claim_outpoint, sd_hash):
-        return self._storage.save_name_metadata(claim_outpoint, sd_hash)
+    def _save_name_metadata(self, name, claim_outpoint, metadata, is_mine=False):
+        return self._storage.save_name_metadata(name, claim_outpoint, metadata, is_mine)
 
+    # TODO: use file ids
     def _get_claim_metadata_for_sd_hash(self, sd_hash):
         return self._storage.get_claim_metadata_for_sd_hash(sd_hash)
 
@@ -118,7 +119,7 @@ class Wallet(object):
         return self._storage.update_claimid(claim_id, name, claim_outpoint)
 
     def _get_claimid_for_tx(self, name, claim_outpoint):
-        return self._storage.get_claimid_for_tx(name, claim_outpoint)
+        return self._storage.get_claimid_for_tx(claim_outpoint)
 
     @staticmethod
     def log_stop_error(err):
@@ -336,10 +337,24 @@ class Wallet(object):
         log.debug("There were no payments to send")
         return defer.succeed(True)
 
-    def get_stream_info_for_name(self, name):
+    def refresh_stream_info_for_name(self, name):
+        log.info("Resolving stream info for lbry://%s", name)
         d = self._get_value_for_name(name)
         d.addCallback(self._get_stream_info_from_value, name)
         return d
+
+    @defer.inlineCallbacks
+    def get_stream_info_for_name(self, name, force_refresh=True):
+        if force_refresh:
+            result = yield self.refresh_stream_info_for_name(name)
+        else:
+            last_checked = yield self._storage.last_checked_winning_name(name)
+            if not last_checked or (utils.time() - last_checked) >= 30:
+                result = yield self.refresh_stream_info_for_name(name)
+            else:
+                log.debug("Using cached stream info for lbry://%s", name)
+                result = yield self._storage.get_winning_metadata(name)
+        defer.returnValue(result)
 
     def get_txid_for_name(self, name):
         d = self._get_value_for_name(name)
@@ -378,11 +393,12 @@ class Wallet(object):
             metadata = Metadata(json.loads(result['value']))
         except (TypeError, ValueError, ValidationError):
             return Failure(InvalidStreamInfoError(name, result['value']))
-        sd_hash = metadata['sources']['lbry_sd_hash']
+
         claim_outpoint = ClaimOutpoint(result['txid'], result['n'])
-        d = self._save_name_metadata(name, claim_outpoint, sd_hash)
+        d = self._save_name_metadata(name, claim_outpoint, metadata)
         d.addCallback(lambda _: self.get_claimid(name, result['txid'], result['n']))
         d.addCallback(lambda cid: _log_success(cid))
+        d.addCallback(lambda _: self._storage.set_winning_claim(name, claim_outpoint))
         d.addCallback(lambda _: metadata)
         return d
 
@@ -413,28 +429,23 @@ class Wallet(object):
         d.addCallback(_get_id_for_return)
         return d
 
+    @defer.inlineCallbacks
     def get_my_claim(self, name):
-        def _get_claim_for_return(claim):
-            if not claim:
-                return False
-            claim['value'] = json.loads(claim['value'])
-            return claim
-
-        def _get_my_unspent_claim(claims):
-            for claim in claims:
-                is_unspent = (
-                    claim['name'] == name and
-                    not claim['is spent'] and
-                    not claim.get('supported_claimid', False)
-                )
-                if is_unspent:
-                    return claim
-            return False
-
-        d = self.get_name_claims()
-        d.addCallback(_get_my_unspent_claim)
-        d.addCallback(_get_claim_for_return)
-        return d
+        my_claims = yield self.get_name_claims()
+        my_unspent_claim = False
+        for claim in my_claims:
+            is_unspent = (
+                claim['name'] == name and
+                not claim['is spent'] and
+                not claim.get('supported_claimid', False)
+            )
+            if is_unspent:
+                my_unspent_claim = claim
+                my_unspent_claim['value'] = json.loads(claim['value'])
+                outpoint = ClaimOutpoint(my_unspent_claim['txid'], my_unspent_claim['nout'])
+                yield self._save_name_metadata(name, outpoint, my_unspent_claim['value'],
+                                               is_mine=True)
+        defer.returnValue(my_unspent_claim)
 
     def get_claim_info(self, name, txid=None, nout=None):
         if txid is None or nout is None:
@@ -461,12 +472,12 @@ class Wallet(object):
         return result
 
     def _get_claim_info(self, name, claim_outpoint):
+        log.info("Get claim info %s %s", name, claim_outpoint)
         def _build_response(claim):
             try:
                 metadata = Metadata(json.loads(claim['value']))
                 meta_ver = metadata.version
-                sd_hash = metadata['sources']['lbry_sd_hash']
-                d = self._save_name_metadata(name, claim_outpoint, sd_hash)
+                d = self._save_name_metadata(name, claim_outpoint, metadata)
             except (TypeError, ValueError, ValidationError):
                 metadata = claim['value']
                 meta_ver = "Non-compliant"
@@ -543,7 +554,7 @@ class Wallet(object):
         claim_outpoint = ClaimOutpoint(claim['txid'], claim['nout'])
         log.info("Saving metadata for claim %s %d", claim['txid'], claim['nout'])
 
-        yield self._save_name_metadata(name, claim_outpoint, _metadata['sources']['lbry_sd_hash'])
+        yield self._save_name_metadata(name, claim_outpoint, _metadata, is_mine=True)
         defer.returnValue(claim)
 
     @defer.inlineCallbacks

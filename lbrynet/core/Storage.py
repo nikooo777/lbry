@@ -63,10 +63,14 @@ class MemoryStorage(object):
         if args:
             query_str %= args
         log.debug(query_str)
-        if args:
-            result = yield self.sqlite_db.runQuery(query, args)
-        else:
-            result = yield self.sqlite_db.runQuery(query)
+        try:
+            if args:
+                result = yield self.sqlite_db.runQuery(query, args)
+            else:
+                result = yield self.sqlite_db.runQuery(query)
+        except:
+            log.error(query_str)
+            raise
         log.debug(result)
         defer.returnValue(result)
 
@@ -81,7 +85,7 @@ class MemoryStorage(object):
              "status TEXT NOT NULL,"
              "txid TEXT NOT NULL, "
              "nout INTEGER, "
-             "claim_transaction_id TEXT NOT NULL, "
+             "claim_transaction_id TEXT, "
              "claim_hash TEXT NOT NULL UNIQUE, "
              "sd_blob_id TEXT, "
              "is_mine BOOLEAN "
@@ -90,10 +94,10 @@ class MemoryStorage(object):
             ("CREATE TABLE IF NOT EXISTS winning_claims ("
              "id INTEGER PRIMARY KEY AUTOINCREMENT, "
              "name TEXT NOT NULL UNIQUE, "
-             "claim_id INTEGER NOT NULL UNIQUE, "
+             "claim_id INTEGER UNIQUE NOT NULL, "
              "last_checked INTEGER, "
              "FOREIGN KEY(claim_id) REFERENCES claims(id) "
-             "ON DELETE CASCADE ON UPDATE CASCADE "
+             "ON DELETE SET NULL ON UPDATE SET NULL "
              ")"),
 
             ("CREATE TABLE IF NOT EXISTS metadata ("
@@ -303,6 +307,14 @@ class MemoryStorage(object):
         defer.returnValue(None)
 
     @defer.inlineCallbacks
+    def add_blob_hash(self, blob_hash):
+        blob_id = yield self.get_blob_row_id(blob_hash)
+        if blob_id is False:
+            yield self.query("INSERT INTO blobs VALUES (NULL, ?)", (blob_hash, ))
+            blob_id = yield self.get_blob_row_id(blob_hash)
+        defer.returnValue(blob_id)
+
+    @defer.inlineCallbacks
     def get_stream_terminator(self, file_id):
         stream_terminator = yield self.query("SELECT blob_count, iv FROM stream_terminators WHERE id=?",
                                              (file_id, ))
@@ -477,10 +489,10 @@ class MemoryStorage(object):
                 file_path = os.path.join(blob_dir, blob_hash)
                 if os.path.isfile(file_path):
                     verified_blobs.append(blob_hash)
-                    yield self.update_blob_verified_timestamp(blob_hash, utils.now())
+                    yield self.update_blob_verified_timestamp(blob_hash, utils.time())
             else:
                 verified_blobs.append(blob_hash)
-                yield self.update_blob_verified_timestamp(blob_hash, utils.now())
+                yield self.update_blob_verified_timestamp(blob_hash, utils.time())
         defer.returnValue(verified_blobs)
 
     @defer.inlineCallbacks
@@ -505,26 +517,59 @@ class MemoryStorage(object):
         return utils.claim_hash(outpoint['txid'], outpoint['nout'])
 
     @defer.inlineCallbacks
-    def add_claim(self, name, txid, nout, claim_id, is_mine=False):
+    def add_claim(self, name, txid, nout, claim_id=None, is_mine=False):
         claim_hash = utils.claim_hash(txid, nout)
         claim_row_id = yield self.get_claim_row_id(claim_hash)
         assert not claim_row_id, Exception("Claim already known")
-        query = "INSERT INTO claims VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, NULL)"
-        yield self.query(query, (name, CLAIM_STATUS.INIT, txid, nout, claim_id, claim_hash, is_mine))
+        yield self.query("INSERT INTO claims VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, NULL)",
+                         (name, CLAIM_STATUS.INIT, txid, nout, claim_id, claim_hash, is_mine))
         defer.returnValue(True)
 
     @defer.inlineCallbacks
+    def set_winning_claim(self, name, claim_outpoint):
+        claim_hash = self.get_claim_hash(claim_outpoint)
+        id_query = yield self.query("SELECT id FROM claims WHERE claim_hash=?",
+                                    (claim_hash, ))
+        id = id_query[0][0]
+        is_update = yield self.query("SELECT * FROM winning_claims WHERE name=?", (name, ))
+        if is_update:
+            yield self.query("UPDATE winning_claims SET claim_id=?, last_checked=? WHERE name=?",
+                             (id, utils.time(), name))
+        else:
+            yield self.query("INSERT INTO winning_claims VALUES (NULL, ?, ?, ?)",
+                             (name, id, utils.time()))
+
+        inactive_claims = yield self.query("SELECT id FROM claims WHERE name=? AND status=?",
+                                           (name, CLAIM_STATUS.ACTIVE))
+        for inactive_id in inactive_claims:
+            yield self.query("UPDATE claims SET status=? WHERE id=?",
+                             (CLAIM_STATUS.INACTIVE, inactive_id[0]))
+        yield self.update_claim_status(claim_hash, CLAIM_STATUS.ACTIVE)
+        defer.returnValue(True)
+
+    @defer.inlineCallbacks
+    def last_checked_winning_name(self, name):
+        results = yield self.query("SELECT last_checked FROM winning_claims WHERE name=?",
+                                   (name, ))
+        last_checked = None
+        if results:
+            last_checked = results[0][0]
+        defer.returnValue(last_checked)
+
+    @defer.inlineCallbacks
     def add_metadata_to_claim(self, claim_hash, metadata):
-        sd_hash = utils.get_sd_hash(metadata)
+        log.info("Saving metadata (type %s) : %s", str(type(metadata)), metadata)
         claim_row_id = yield self.get_claim_row_id(claim_hash)
         try:
-            add_sd_hash_query = "UPDATE claims SET sd_hash=? WHERE id=?"
-            yield self.query(add_sd_hash_query, (sd_hash, claim_row_id))
-
+            sd_hash = utils.get_sd_hash(metadata)
+            sd_blob_id = yield self.add_blob_hash(sd_hash)
+            add_sd_hash_query = "UPDATE claims SET sd_blob_id=? WHERE id=?"
+            yield self.query(add_sd_hash_query, (sd_blob_id, claim_row_id))
             add_metadata_query = "INSERT INTO metadata VALUES (?, ?)"
             yield self.query(add_metadata_query, (claim_row_id, utils.metadata_to_b58(metadata)))
             status_code = CLAIM_STATUS.PENDING
         except Exception as err:
+            log.exception(err)
             status_code = CLAIM_STATUS.INVALID_METADATA
             log.warning(err)
         yield self.update_claim_status(claim_hash, status_code)
@@ -532,7 +577,6 @@ class MemoryStorage(object):
 
     @defer.inlineCallbacks
     def update_claim_status(self, claim_hash, status):
-        assert status in CLAIM_STATUS, Exception("Unknown status: %s" % status)
         row_id = yield self.get_claim_row_id(claim_hash)
         assert row_id is not False, Exception("No claim to update")
         query = "UPDATE claims SET status=? WHERE id=?"
@@ -550,8 +594,7 @@ class MemoryStorage(object):
         defer.returnValue(status)
 
     @defer.inlineCallbacks
-    def get_metadata_for_claim(self, claim_hash):
-        row_id = yield self.get_claim_row_id(claim_hash)
+    def get_metadata_for_claim(self, row_id):
         metadata = None
         if row_id is not False:
             query = "SELECT value FROM metadata WHERE id=?"
@@ -566,30 +609,24 @@ class MemoryStorage(object):
         defer.returnValue(None)
 
     @defer.inlineCallbacks
-    def save_name_metadata(self, claim_outpoint, metadata):
+    def save_name_metadata(self, name, claim_outpoint, metadata, is_mine=False):
         claim_hash = self.get_claim_hash(claim_outpoint)
         status = yield self.get_claim_status(claim_hash)
 
         if not status:
-            raise Exception("No such claim")
-        if status == CLAIM_STATUS.INIT:
+            log.info("Adding new claim")
+            yield self.add_claim(name, claim_outpoint['txid'], claim_outpoint['nout'],
+                                 is_mine=is_mine)
+        if not status or status == CLAIM_STATUS.INIT:
+            log.info("Adding metadata to claim")
             yield self.add_metadata_to_claim(claim_hash, metadata)
         defer.returnValue(True)
 
-    # def update_claimid(self, claim_id, name, claim_outpoint):
-    #     d = self.db.runQuery(
-    #         "delete from claim_ids where claimId=? and name=? and txid=? and n=?",
-    #         (claim_id, name, claim_outpoint['txid'], claim_outpoint['nout']))
-    #     d.addCallback(
-    #         lambda _: self.db.runQuery(
-    #             "delete from claim_ids where claimId=? and name=? and txid=? and n=?",
-    #             (claim_id, name, claim_outpoint['txid'], UNSET_NOUT)))
-    #     d.addCallback(
-    #         lambda r: self.db.runQuery(
-    #             "insert into claim_ids values (?, ?, ?, ?)",
-    #             (claim_id, name, claim_outpoint['txid'], claim_outpoint['nout'])))
-    #     d.addCallback(lambda _: claim_id)
-    #     return d
+    @defer.inlineCallbacks
+    def update_claimid(self, claim_tx_id, name, claim_outpoint):
+        query = "UPDATE claims SET claim_transaction_id=? WHERE txid=? AND nout=?"
+        yield self.query(query, (claim_tx_id, claim_outpoint['txid'], claim_outpoint['nout']))
+        defer.returnValue(True)
 
     @defer.inlineCallbacks
     def get_claimid_for_tx(self, claim_outpoint):
@@ -600,6 +637,29 @@ class MemoryStorage(object):
         if query_result:
             claim_id = query_result[0][0]
         defer.returnValue(claim_id)
+
+    @defer.inlineCallbacks
+    def get_claim_metadata_for_sd_hash(self, sd_hash):
+        result = None
+        claim_id = None
+        sd_id = yield self.get_blob_row_id(sd_hash)
+        if sd_id:
+            claim_result = self.query("SELECT id FROM claims WHERE sd_blob_id=?", sd_id)
+            if claim_result:
+                claim_id = claim_result[0][0]
+        if claim_id is not None:
+            result = yield self.get_metadata_for_claim(claim_id)
+        defer.returnValue(result)
+
+    @defer.inlineCallbacks
+    def get_winning_metadata(self, name):
+        metadata = False
+        winning_id = yield self.query("SELECT claim_id FROM winning_claims WHERE name=?", (name, ))
+        result = yield self.query("SELECT value FROM metadata WHERE id=?", winning_id[0])
+        if result:
+            encoded_metadata = result[0][0]
+            metadata = utils.decode_b58_metadata(encoded_metadata)
+        defer.returnValue(metadata)
 
 
 class FileStorage(MemoryStorage):

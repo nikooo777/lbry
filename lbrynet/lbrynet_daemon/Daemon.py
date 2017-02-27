@@ -271,7 +271,6 @@ class Daemon(AuthJSONRPCServer):
         self.waiting_on = {}
         self.streams = {}
         self.pending_claims = {}
-        self.name_cache = {}
         self.exchange_rate_manager = ExchangeRateManager()
 
         self._remote_version = CheckRemoteVersion()
@@ -337,7 +336,6 @@ class Daemon(AuthJSONRPCServer):
 
         yield self._setup_data_directory()
         yield self._check_db_migration()
-        yield self._load_caches()
 
         # set up lbrynet session
         yield self.session.setup()
@@ -437,14 +435,6 @@ class Daemon(AuthJSONRPCServer):
         if self.platform is None:
             self.platform = system_info.get_platform()
         return self.platform
-
-    def _load_caches(self):
-        name_cache_filename = os.path.join(self.db_dir, "stream_info_cache.json")
-
-        if os.path.isfile(name_cache_filename):
-            with open(name_cache_filename, "r") as name_cache:
-                self.name_cache = json.loads(name_cache.read())
-            log.info("Loaded claim info cache")
 
     def _check_network_connection(self):
         self.connected_to_internet = utils.check_connection()
@@ -823,16 +813,6 @@ class Daemon(AuthJSONRPCServer):
                                        file_name=file_name)
         return self.streams[name].start(stream_info, name)
 
-    def _get_long_count_timestamp(self):
-        dt = utils.utcnow() - utils.datetime_obj(year=2012, month=12, day=21)
-        return int(dt.total_seconds())
-
-    def _update_claim_cache(self):
-        f = open(os.path.join(self.db_dir, "stream_info_cache.json"), "w")
-        f.write(json.dumps(self.name_cache))
-        f.close()
-        return defer.succeed(True)
-
     def _resolve_name(self, name, force_refresh=False):
         """Resolves a name. Checks the cache first before going out to the blockchain.
 
@@ -840,10 +820,10 @@ class Daemon(AuthJSONRPCServer):
             name: the lbry://<name> to resolve
             force_refresh: if True, always go out to the blockchain to resolve.
         """
+
         if name.startswith('lbry://'):
             raise ValueError('name {} should not start with lbry://'.format(name))
-        helper = _ResolveNameHelper(self, name, force_refresh)
-        return helper.get_deferred()
+        return self.session.wallet.get_stream_info_for_name(name, force_refresh)
 
     @defer.inlineCallbacks
     def _delete_lbry_file(self, lbry_file, delete_file=True):
@@ -852,7 +832,7 @@ class Daemon(AuthJSONRPCServer):
 
         yield self.lbry_file_manager.delete_lbry_file(lbry_file)
         yield lbry_file.delete_data()
-        stream_count = yield self.lbry_file_manager.get_count_for_stream_hash(stream_hash)
+        stream_count = yield self.stream_info_manager.get_count_for_stream(stream_hash)
         if stream_count == 0:
             yield self.stream_info_manager.delete_stream(stream_hash)
         else:
@@ -2581,59 +2561,6 @@ class _DownloadNameHelper(object):
         if self.name in self.daemon.waiting_on:
             del self.daemon.waiting_on[self.name]
         return reason
-
-
-class _ResolveNameHelper(object):
-    def __init__(self, daemon, name, force_refresh):
-        self.daemon = daemon
-        self.name = name
-        self.force_refresh = force_refresh
-
-    def get_deferred(self):
-        if self.need_fresh_stream():
-            log.info("Resolving stream info for lbry://%s", self.name)
-            d = self.wallet.get_stream_info_for_name(self.name)
-            d.addCallback(self._cache_stream_info)
-        else:
-            log.debug("Returning cached stream info for lbry://%s", self.name)
-            d = defer.succeed(self.name_data['claim_metadata'])
-        return d
-
-    @property
-    def name_data(self):
-        return self.daemon.name_cache[self.name]
-
-    @property
-    def wallet(self):
-        return self.daemon.session.wallet
-
-    def now(self):
-        return self.daemon._get_long_count_timestamp()
-
-    def _add_txid(self, txid):
-        self.name_data['txid'] = txid
-        return defer.succeed(None)
-
-    def _cache_stream_info(self, stream_info):
-        self.daemon.name_cache[self.name] = {
-            'claim_metadata': stream_info,
-            'timestamp': self.now()
-        }
-        d = self.wallet.get_txid_for_name(self.name)
-        d.addCallback(self._add_txid)
-        d.addCallback(lambda _: self.daemon._update_claim_cache())
-        d.addCallback(lambda _: self.name_data['claim_metadata'])
-        return d
-
-    def need_fresh_stream(self):
-        return self.force_refresh or not self.is_in_cache() or self.is_cached_name_expired()
-
-    def is_in_cache(self):
-        return self.name in self.daemon.name_cache
-
-    def is_cached_name_expired(self):
-        time_in_cache = self.now() - self.name_data['timestamp']
-        return time_in_cache >= self.daemon.cache_time
 
 
 class _GetFileHelper(object):

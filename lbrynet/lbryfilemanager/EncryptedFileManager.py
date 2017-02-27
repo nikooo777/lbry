@@ -10,7 +10,6 @@ from lbrynet.lbryfilemanager.EncryptedFileDownloader import ManagedEncryptedFile
 from lbrynet.lbryfile.StreamDescriptor import EncryptedFileStreamType
 from lbrynet.cryptstream.client.CryptStreamDownloader import AlreadyStoppedError
 from lbrynet.cryptstream.client.CryptStreamDownloader import CurrentlyStoppingError
-from lbrynet.core.sqlite_helpers import rerun_if_locked
 
 
 log = logging.getLogger(__name__)
@@ -77,6 +76,26 @@ class EncryptedFileManager(object):
     def get_lbry_file_status(self, lbry_file):
         status = yield self.storage.get_lbry_file_status(lbry_file.rowid)
         defer.returnValue(status)
+
+    @defer.inlineCallbacks
+    def get_claim_metadata_for_file(self, lbry_file):
+        claim_out = yield self.storage.get_claim_hash_for_file(lbry_file.rowid)
+        defer.returnValue(claim_out)
+
+    @defer.inlineCallbacks
+    def get_lbry_name_for_file(self, lbry_file):
+        claim_out = yield self.storage.get_claimed_name_for_file(lbry_file.rowid)
+        defer.returnValue(claim_out)
+
+    @defer.inlineCallbacks
+    def get_claim_status_for_file(self, lbry_file):
+        status = yield self.storage.get_claim_status_for_file(lbry_file.rowid)
+        defer.returnValue(status)
+
+    @defer.inlineCallbacks
+    def get_sd_hash_for_file(self, lbry_file):
+        sd_hash = yield self.storage.get_sd_hash_for_file(lbry_file.rowid)
+        defer.returnValue(sd_hash)
 
     @defer.inlineCallbacks
     def set_lbry_file_data_payment_rate(self, lbry_file, new_rate):

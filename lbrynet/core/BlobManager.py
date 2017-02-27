@@ -1,7 +1,4 @@
 import logging
-import os
-import time
-import sqlite3
 
 from twisted.internet import defer
 from zope.interface import implements

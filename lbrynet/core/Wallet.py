@@ -1,7 +1,6 @@
 import datetime
 import logging
 import json
-import hashlib
 
 from twisted.internet import threads, reactor, defer, task
 from twisted.python.failure import Failure
@@ -9,18 +8,15 @@ from collections import defaultdict, deque
 from zope.interface import implements
 from jsonschema import ValidationError
 from decimal import Decimal
-from lbrynet.core.Storage import MemoryStorage
 from lbryum import SimpleConfig, Network
 from lbryum.lbrycrd import COIN, RECOMMENDED_CLAIMTRIE_HASH_CONFIRMS
 import lbryum.wallet
 from lbryum.commands import known_commands, Commands
 from lbrynet.core import utils
-from lbrynet.core.sqlite_helpers import rerun_if_locked
 from lbrynet.interfaces import IRequestCreator, IQueryHandlerFactory, IQueryHandler, IWallet
 from lbrynet.core.client.ClientRequest import ClientRequest
 from lbrynet.core.Error import (UnknownNameError, InvalidStreamInfoError, RequestCanceledError,
                             InsufficientFundsError)
-from lbrynet.db_migrator.migrate1to2 import UNSET_NOUT
 from lbrynet.metadata.Metadata import Metadata
 
 

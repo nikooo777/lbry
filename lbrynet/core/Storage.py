@@ -27,6 +27,7 @@ class CLAIM_STATUS(object):
     ACTIVE = "ACTIVE"
     INACTIVE = "INACTIVE"
     INVALID_METADATA = "INVALID_METADATA"
+    MISSING_METADATA = "MISSING_METADATA"
 
 
 class MemoryStorage(object):
@@ -388,23 +389,40 @@ class MemoryStorage(object):
             sd_hash = yield self.query("SELECT blob_hash FROM blobs WHERE id=?", sd_blob_id[0])
             if sd_hash:
                 results = [sd_hash[0][0]]
+        log.info("Got sd hash %s for %s", results, stream_hash)
         defer.returnValue(results)
+
+    @defer.inlineCallbacks
+    def get_sd_hash_for_file(self, file_id):
+        sd_blob_id = yield self.query("SELECT sd_blob_id FROM files WHERE id=?", (file_id,))
+        result = None
+        if sd_blob_id:
+            sd_blob = yield self.query("SELECT blob_hash FROM blobs WHERE id=?", sd_blob_id[0])
+            if sd_blob:
+                result = sd_blob[0][0]
+        defer.returnValue(result)
 
     ############# File manager
 
-
     @defer.inlineCallbacks
     def save_lbry_file(self, stream_hash, data_payment_rate):
-        log.info("Save new file")
+        files = yield self.query("SELECT id FROM files")
         rowid = yield self.get_file_row_id(stream_hash)
         if data_payment_rate is None:
             data_payment_rate = 0.0
-        if not rowid:
+        if rowid is False:
             yield self.query("INSERT INTO files VALUES "
                                      "(NULL, ?, ?, ?, NULL, NULL, NULL, NULL)",
                                      (STREAM_STATUS.PENDING,
                                       data_payment_rate, stream_hash))
-        yield self.get_file_row_id(stream_hash)
+            rowid = yield self.get_file_row_id(stream_hash)
+        else:
+            yield self.query("UPDATE files SET status=?, blob_data_rate=? WHERE id=?",
+                                     (STREAM_STATUS.PENDING,
+                                      data_payment_rate, rowid))
+        f = yield self.query("SELECT * FROM files WHERE id=?", (rowid, ))
+        log.info("Saved: %s", str(f))
+        defer.returnValue(rowid)
 
     @defer.inlineCallbacks
     def delete_lbry_file_options(self, rowid):
@@ -482,6 +500,7 @@ class MemoryStorage(object):
 
     @defer.inlineCallbacks
     def get_all_verified_blob_hashes(self, blob_dir=None):
+        log.info("Get all verified blob hashes")
         blob_hashes = yield self.query("SELECT blob_hash FROM blobs")
         verified_blobs = []
         for blob_hash, in blob_hashes:
@@ -514,11 +533,11 @@ class MemoryStorage(object):
     ##### Wallet
 
     def get_claim_hash(self, outpoint):
-        return utils.claim_hash(outpoint['txid'], outpoint['nout'])
+        return utils.condensed_claim_out(outpoint['txid'], outpoint['nout'])
 
     @defer.inlineCallbacks
     def add_claim(self, name, txid, nout, claim_id=None, is_mine=False):
-        claim_hash = utils.claim_hash(txid, nout)
+        claim_hash = utils.condensed_claim_out(txid, nout)
         claim_row_id = yield self.get_claim_row_id(claim_hash)
         assert not claim_row_id, Exception("Claim already known")
         yield self.query("INSERT INTO claims VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, NULL)",
@@ -644,7 +663,7 @@ class MemoryStorage(object):
         claim_id = None
         sd_id = yield self.get_blob_row_id(sd_hash)
         if sd_id:
-            claim_result = self.query("SELECT id FROM claims WHERE sd_blob_id=?", sd_id)
+            claim_result = yield self.query("SELECT id FROM claims WHERE sd_blob_id=?", sd_id)
             if claim_result:
                 claim_id = claim_result[0][0]
         if claim_id is not None:
@@ -660,6 +679,40 @@ class MemoryStorage(object):
             encoded_metadata = result[0][0]
             metadata = utils.decode_b58_metadata(encoded_metadata)
         defer.returnValue(metadata)
+
+    @defer.inlineCallbacks
+    def get_claim_status_for_file(self, file_id):
+        claim_id = yield self.query("SELECT claim_id FROM files WHERE id=?", (file_id, ))
+        result = False
+        status = None
+        if claim_id:
+            status = yield self.query("SELECT status FROM claims WHERE id=?", claim_id[0])
+        if status:
+            result = status[0][0]
+        defer.returnValue(result)
+
+    @defer.inlineCallbacks
+    def get_claim_hash_for_file(self, file_id):
+        claim_id = yield self.query("SELECT claim_id FROM files WHERE id=?", (file_id, ))
+        result = False
+        claim_hash_result = None
+        if claim_id:
+            claim_hash_result = yield self.query("SELECT claim_hash FROM claims WHERE id=?", claim_id[0])
+        if claim_hash_result:
+            result = claim_hash_result[0][0]
+        defer.returnValue(result)
+
+    @defer.inlineCallbacks
+    def get_claimed_name_for_file(self, file_id):
+        claim_id = yield self.query("SELECT claim_id FROM files WHERE id=?", (file_id, ))
+        result = False
+        name_results = None
+        if claim_id:
+            name_results = yield self.query("SELECT name FROM claims WHERE id=?", claim_id[0])
+        if name_results:
+            result = name_results[0][0]
+        defer.returnValue(result)
+
 
 
 class FileStorage(MemoryStorage):

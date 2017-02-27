@@ -30,7 +30,7 @@ class MocLbryumWallet(Wallet):
     def get_name_claims(self):
         return threads.deferToThread(lambda: [])
 
-    def _save_name_metadata(self, name, claim_outpoint, sd_hash):
+    def _save_name_metadata(self, name, claim_outpoint, sd_hash, is_mine):
         return defer.succeed(True)
 
 

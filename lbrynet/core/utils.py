@@ -121,10 +121,16 @@ def get_sd_hash(metadata_dict):
     return sd_hash
 
 
-def claim_hash(txid, nout):
+def condensed_claim_out(txid, nout):
     decoded_txid = txid.decode('hex')
     txid_with_nout = decoded_txid + chr(int(nout))
     return base58.b58encode(txid_with_nout)
+
+
+def expand_claim_out(claim_out):
+    decoded = base58.b58decode(claim_out)
+    txid, nout = str(decoded[:-1]).encode('hex'), ord(decoded[-1])
+    return txid, nout
 
 
 def metadata_to_b58(metadata):

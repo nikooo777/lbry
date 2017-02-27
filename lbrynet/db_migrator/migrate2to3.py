@@ -202,7 +202,7 @@ def migrate_dbs(db_dir):
             lbry_files[stream_hash]['name'] = name
             lbry_files[stream_hash]['txid'] = txid
             lbry_files[stream_hash]['nout'] = nout
-            claim_hash = utils.claim_hash(txid, nout)
+            claim_hash = utils.condensed_claim_out(txid, nout)
             lbry_files[stream_hash]['claim_hash'] = claim_hash
             lbry_files[stream_hash]['sd_hash'] = sd_hash
             claim_ids_needed.update({(txid, nout): stream_hash})

@@ -7,8 +7,7 @@ from zope.interface import implements
 from twisted.internet import defer
 
 from lbrynet.core.client.StreamProgressManager import FullStreamProgressManager
-from lbrynet.core.Error import NoSuchSDHash, NoSuchStreamHash
-from lbrynet.core.utils import short_hash
+from lbrynet.core.utils import short_hash, expand_claim_out, get_sd_hash
 from lbrynet.core.StreamDescriptor import StreamMetadata
 from lbrynet.lbryfile.client.EncryptedFileDownloader import EncryptedFileSaver
 from lbrynet.lbryfile.client.EncryptedFileDownloader import EncryptedFileDownloader
@@ -17,6 +16,15 @@ from lbrynet.interfaces import IStreamDownloaderFactory
 from lbrynet.lbryfile.StreamDescriptor import save_sd_info
 
 log = logging.getLogger(__name__)
+
+
+class CLAIM_STATUS(object):
+    INIT = "INIT"
+    PENDING = "PENDING"
+    ACTIVE = "ACTIVE"
+    INACTIVE = "INACTIVE"
+    INVALID_METADATA = "INVALID_METADATA"
+    MISSING_METADATA = "MISSING_METADATA"
 
 
 def log_status(uri, sd_hash, status):
@@ -103,29 +111,24 @@ class ManagedEncryptedFileDownloader(EncryptedFileSaver):
                                                     num_blobs_known, status_code))
 
     @defer.inlineCallbacks
-    def load_file_attributes(self, attempt=0):
-        sd_hash = yield self.stream_info_manager.get_sd_blob_hashes_for_stream(self.stream_hash)
-        if sd_hash:
-            self.sd_hash = sd_hash[0]
-            log.info("Sd hash: %s", self.sd_hash)
-        else:
-            log.warning("No sd hash yet")
-            # raise NoSuchStreamHash(self.stream_hash)
-        stream_metadata = yield self.wallet.get_claim_metadata_for_sd_hash(self.sd_hash)
-        if stream_metadata:
-            name, txid, nout = stream_metadata
-            self.uri = name
-            self.txid = txid
-            self.nout = nout
-            self.claim_id = yield self.wallet.get_claimid(self.uri, self.txid, self.nout)
-        else:
-            log.warning("No claim metadata")
-            # raise NoSuchSDHash(self.sd_hash)
+    def load_file_attributes(self):
+        claim_out = yield self.lbry_file_manager.get_claim_metadata_for_file(self)
+        if claim_out:
+            self.txid, self.nout = expand_claim_out(claim_out)
+        self.uri = yield self.lbry_file_manager.get_lbry_name_for_file(self)
+        self.sd_hash = yield self.lbry_file_manager.get_sd_hash_for_file(self)
+
+        claim_status = yield self.lbry_file_manager.get_claim_status_for_file(self)
+        if claim_status == CLAIM_STATUS.MISSING_METADATA:
+            claim_info = yield self.wallet.get_claim_info(self.uri, self.txid, self.nout)
+            metadata = claim_info['value']
+            self.sd_hash = get_sd_hash(metadata)
+            yield self.stream_info_manager.save_sd_blob_hash_to_stream(self.stream_hash,
+                                                                       self.sd_hash)
 
     @defer.inlineCallbacks
     def _start(self):
         yield EncryptedFileSaver._start(self)
-
         yield self.load_file_attributes()
         status = yield self.save_status()
         log_status(self.uri, self.sd_hash, status)

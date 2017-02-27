@@ -4,10 +4,12 @@ import sqlite3
 from twisted.internet import defer
 from twisted.enterprise import adbapi
 from zope.interface import implements
-from lbrynet.interfaces import IStorage
-from lbrynet.core import utils
-from lbrynet.core import Error
+
 from lbrynet import conf
+from lbrynet.interfaces import IStorage
+from lbrynet.core import utils, Error
+from lbrynet.core.sqlite_helpers import rerun_if_locked
+
 
 log = logging.getLogger(__name__)
 
@@ -52,6 +54,7 @@ class MemoryStorage(object):
             yield self.sqlite_db.close()
         defer.returnValue(True)
 
+    @rerun_if_locked
     @defer.inlineCallbacks
     def query(self, query, args=None):
         if not self.is_open:
@@ -59,14 +62,12 @@ class MemoryStorage(object):
         query_str = query.replace("?", "%s")
         if args:
             query_str %= args
-        try:
-            if args:
-                result = yield self.sqlite_db.runQuery(query, args)
-            else:
-                result = yield self.sqlite_db.runQuery(query)
-        except sqlite3.IntegrityError as err:
-            log.warning(err)
-            result = None
+        log.debug(query_str)
+        if args:
+            result = yield self.sqlite_db.runQuery(query, args)
+        else:
+            result = yield self.sqlite_db.runQuery(query)
+        log.debug(result)
         defer.returnValue(result)
 
     @defer.inlineCallbacks

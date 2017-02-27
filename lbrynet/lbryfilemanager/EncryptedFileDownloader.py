@@ -26,26 +26,26 @@ def log_status(uri, sd_hash, status):
         status_string = "stopped"
     elif status == ManagedEncryptedFileDownloader.STATUS_FINISHED:
         status_string = "finished"
+    elif status == ManagedEncryptedFileDownloader.STATUS_STREAM_PENDING:
+        status_string = "pending"
     else:
-        status_string = "unknown"
-    log.info("lbry://%s (%s) is %s", uri, short_hash(sd_hash), status_string)
+        status_string = "unknown (%s)" % status
+    log.info("lbry://%s (%s) is %s", uri, short_hash(sd_hash or "?"), status_string)
 
 
 class ManagedEncryptedFileDownloader(EncryptedFileSaver):
     STATUS_RUNNING = "running"
     STATUS_STOPPED = "stopped"
     STATUS_FINISHED = "finished"
+    STATUS_STREAM_PENDING = "pending"
 
-    def __init__(self, rowid, stream_hash, peer_finder, rate_limiter,
-                 blob_manager, stream_info_manager, lbry_file_manager,
-                 payment_rate_manager, wallet, download_directory,
-                 file_name=None):
-        EncryptedFileSaver.__init__(self, stream_hash, peer_finder,
-                                    rate_limiter, blob_manager,
-                                    stream_info_manager,
-                                    payment_rate_manager, wallet,
-                                    download_directory,
-                                    file_name)
+    def __init__(self, rowid, stream_hash, peer_finder, rate_limiter, blob_manager,
+                 stream_info_manager, lbry_file_manager, payment_rate_manager, wallet,
+                 download_directory, file_name=None):
+        EncryptedFileSaver.__init__(self, stream_hash, peer_finder, rate_limiter, blob_manager,
+                                    stream_info_manager, payment_rate_manager, wallet,
+                                    download_directory, file_name)
+        self.is_pending = True
         self.sd_hash = None
         self.txid = None
         self.nout = None
@@ -76,16 +76,19 @@ class ManagedEncryptedFileDownloader(EncryptedFileSaver):
         elif status == ManagedEncryptedFileDownloader.STATUS_FINISHED:
             self.completed = True
             defer.returnValue(True)
+        elif status == ManagedEncryptedFileDownloader.STATUS_STREAM_PENDING:
+            self.is_pending = True
+            defer.returnValue(True)
         else:
-            raise Exception("Unknown status for stream %s: %s", self.stream_hash, status)
+            raise Exception("Unknown status for stream %s: %s" % (self.stream_hash, status))
 
     @defer.inlineCallbacks
     def stop(self, err=None, change_status=True):
-        log.debug('Stopping download for %s', short_hash(self.sd_hash))
+        log.info('Stopping download for %s', short_hash(self.sd_hash))
         # EncryptedFileSaver deletes metadata when it's stopped. We don't want that here.
         yield EncryptedFileDownloader.stop(self, err=err)
         if change_status is True:
-            status = yield self._save_status()
+            status = yield self.save_status()
         defer.returnValue(status)
 
     @defer.inlineCallbacks
@@ -95,39 +98,36 @@ class ManagedEncryptedFileDownloader(EncryptedFileSaver):
         completed_blobs = yield self.blob_manager.completed_blobs(blob_hashes)
         num_blobs_completed = len(completed_blobs)
         num_blobs_known = len(blob_hashes)
-
-        if self.completed:
-            status = "completed"
-        elif self.stopped:
-            status = "stopped"
-        else:
-            status = "running"
+        status_code = yield self.lbry_file_manager.get_lbry_file_status(self)
         defer.returnValue(EncryptedFileStatusReport(self.file_name, num_blobs_completed,
-                                                    num_blobs_known, status))
+                                                    num_blobs_known, status_code))
 
     @defer.inlineCallbacks
-    def load_file_attributes(self):
+    def load_file_attributes(self, attempt=0):
         sd_hash = yield self.stream_info_manager.get_sd_blob_hashes_for_stream(self.stream_hash)
         if sd_hash:
             self.sd_hash = sd_hash[0]
+            log.info("Sd hash: %s", self.sd_hash)
         else:
-            raise NoSuchStreamHash(self.stream_hash)
+            log.warning("No sd hash yet")
+            # raise NoSuchStreamHash(self.stream_hash)
         stream_metadata = yield self.wallet.get_claim_metadata_for_sd_hash(self.sd_hash)
         if stream_metadata:
             name, txid, nout = stream_metadata
             self.uri = name
             self.txid = txid
             self.nout = nout
+            self.claim_id = yield self.wallet.get_claimid(self.uri, self.txid, self.nout)
         else:
-            raise NoSuchSDHash(self.sd_hash)
-        self.claim_id = yield self.wallet.get_claimid(self.uri, self.txid, self.nout)
-        defer.returnValue(None)
+            log.warning("No claim metadata")
+            # raise NoSuchSDHash(self.sd_hash)
 
     @defer.inlineCallbacks
     def _start(self):
         yield EncryptedFileSaver._start(self)
+
         yield self.load_file_attributes()
-        status = yield self._save_status()
+        status = yield self.save_status()
         log_status(self.uri, self.sd_hash, status)
         defer.returnValue(status)
 
@@ -138,7 +138,7 @@ class ManagedEncryptedFileDownloader(EncryptedFileSaver):
             return "Download stopped"
 
     @defer.inlineCallbacks
-    def _save_status(self):
+    def save_status(self):
         self._saving_status = True
         if self.completed is True:
             status = ManagedEncryptedFileDownloader.STATUS_FINISHED
@@ -149,9 +149,6 @@ class ManagedEncryptedFileDownloader(EncryptedFileSaver):
         status = yield self.lbry_file_manager.change_lbry_file_status(self, status)
         self._saving_status = False
         defer.returnValue(status)
-
-    def save_status(self):
-        return self._save_status()
 
     def _get_progress_manager(self, download_manager):
         return FullStreamProgressManager(self._finished_downloading,

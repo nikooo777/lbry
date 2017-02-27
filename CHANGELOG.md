@@ -14,9 +14,9 @@ at anytime.
   *
 
 ### Changed
-  *
-  *
-  *
+  * Move all databases into a single Storage class (in memory used for testing)
+  * Move claim resolution and caching to Wallet and Storage
+  * Refactor BlobManager, EncryptedFileManager, EncryptedFileMetadataManager, and Wallet
 
 ### Fixed
   * Added timeout to ClientProtocol

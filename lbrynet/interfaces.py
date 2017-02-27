@@ -720,3 +720,143 @@ class INegotiationStrategy(Interface):
         @return: accepted, rejected, or unset offer
         @rtype: Offer
         """
+class IStorage(Interface):
+    """
+    Interface to SQLite storage (either in memory saved to a file)
+    """
+
+    def is_open(self):
+        pass
+
+    def open(self):
+        pass
+
+    def close(self):
+        pass
+
+    def query(self, query, args=None):
+        pass
+
+    def get_claim_row_id(self, claim_hash):
+        pass
+
+    def get_file_row_id(self, stream_hash):
+        pass
+
+    def get_blob_row_id(self, blob_hash):
+        pass
+
+    def delete_stream(self, stream_hash):
+        pass
+
+    def store_stream(self, stream_hash, file_name, decryption_key, published_file_name):
+        pass
+
+    def get_all_streams(self):
+        pass
+
+    def get_stream_info(self, stream_hash):
+        pass
+
+    def check_if_stream_exists(self, stream_hash):
+        pass
+
+    def get_blob_num_by_hash(self, stream_hash, blob_hash):
+        pass
+
+    def get_count_for_stream(self, stream_hash):
+        pass
+
+    def get_blobs_for_stream(self, stream_hash):
+        pass
+
+    def add_empty_blob(self, file_id, blob_hash, stream_position, iv, length=0):
+        pass
+
+    def get_stream_terminator(self, file_id):
+        pass
+
+    def add_stream_terminator(self, file_id, length, iv):
+        pass
+
+    def add_blobs_to_stream(self, stream_hash, blobs, ignore_duplicate_error=False):
+        pass
+
+    def get_stream_of_blobhash(self, blob_hash):
+        pass
+
+    def save_sd_blob_hash_to_stream(self, stream_hash, sd_blob_hash):
+        pass
+
+    def get_sd_hash_for_stream(self, stream_hash):
+        pass
+
+    def save_lbry_file(self, stream_hash, data_payment_rate):
+        pass
+
+    def delete_lbry_file_options(self, rowid):
+        pass
+
+    def set_lbry_file_payment_rate(self, rowid, new_rate):
+        pass
+
+    def get_all_lbry_files(self):
+        pass
+
+    def change_file_status(self, rowid, new_status):
+        pass
+
+    def get_lbry_file_status(self, rowid):
+        pass
+
+    def add_completed_blob(self, blob_hash, length, next_announce_time):
+        pass
+
+    def update_blob_verified_timestamp(self, blob_hash, timestamp):
+        pass
+
+    def get_blobs_to_announce(self):
+        pass
+
+    def update_next_blob_announce(self, blob_hashes, next_announce_time):
+        pass
+
+    def delete_blob(self, blob_hash):
+        pass
+
+    def get_all_verified_blob_hashes(self, blob_dir=None):
+        pass
+
+    def add_blob_to_download_history(self, blob_hash, host, rate):
+        pass
+
+    def add_blob_to_upload_history(self, blob_hash, host, rate):
+        pass
+
+    def get_claim_hash(self, outpoint):
+        pass
+
+    def add_claim(self, name, txid, nout, claim_id, is_mine=False):
+        pass
+
+    def add_metadata_to_claim(self, claim_hash, metadata):
+        pass
+
+    def update_claim_status(self, claim_hash, status):
+        pass
+
+    def get_claim_status(self, claim_hash):
+        pass
+
+    def get_metadata_for_claim(self, claim_hash):
+        pass
+
+    def clean_bad_records(self):
+        pass
+
+    def save_name_metadata(self, claim_outpoint, metadata):
+        pass
+
+    def update_claimid(self, claim_id, name, claim_outpoint):
+        pass
+

@@ -4,8 +4,10 @@ import logging
 import random
 import socket
 import string
-
+import json
+import base58
 import pkg_resources
+from time import time as timestamp
 
 from lbrynet.core.cryptoutils import get_lbry_hash_obj
 
@@ -24,6 +26,10 @@ def now():
 
 def utcnow():
     return datetime.datetime.utcnow()
+
+
+def time():
+    return timestamp()
 
 
 def isonow():
@@ -108,3 +114,30 @@ def random_string(length=10, chars=string.ascii_lowercase):
 
 def short_hash(hash_str):
     return hash_str[:6]
+
+
+def get_sd_hash(metadata_dict):
+    sd_hash = metadata_dict['sources']['lbry_sd_hash']
+    return sd_hash
+
+
+def claim_hash(txid, nout):
+    decoded_txid = txid.decode('hex')
+    txid_with_nout = decoded_txid + chr(int(nout))
+    return base58.b58encode(txid_with_nout)
+
+
+def metadata_to_b58(metadata):
+    if isinstance(metadata, str):
+        metadata_str = metadata
+    elif isinstance(metadata, dict):
+        metadata_str = json.dumps(metadata)
+    else:
+        raise Exception("Can't encode metadata type %s" % str(type(metadata)))
+    return base58.b58encode(metadata_str)
+
+
+def decode_b58_metadata(encoded_metadata):
+    decoded = base58.b58decode(encoded_metadata)
+    metadata = json.loads(decoded)
+    return metadata

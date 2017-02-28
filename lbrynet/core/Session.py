@@ -299,8 +299,8 @@ class Session(object):
 
         if self.blob_manager is None:
             self.blob_manager = BlobManager(self.hash_announcer,
-                                            self.blob_dir,
-                                            self.storage)
+                                            blob_dir=self.blob_dir,
+                                            storage=self.storage)
 
         if self.blob_tracker is None:
             self.blob_tracker = self.blob_tracker_class(self.blob_manager,

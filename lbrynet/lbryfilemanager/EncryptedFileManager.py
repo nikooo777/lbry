@@ -182,10 +182,9 @@ class EncryptedFileManager(object):
         """
 
         stream_hashes = yield self.stream_info_manager.get_all_streams()
-        dl = []
-        for stream_hash in stream_hashes:
-            dl.append(self.check_stream_is_managed(stream_hash))
-        yield defer.DeferredList(dl)
+        if stream_hashes:
+            for stream_hash in stream_hashes:
+                yield self.check_stream_is_managed(stream_hash)
         defer.returnValue(None)
 
     @defer.inlineCallbacks
@@ -230,10 +229,9 @@ class EncryptedFileManager(object):
     def start_lbry_files(self):
         yield self.check_streams_are_managed()
         files_and_options = yield self.storage.get_all_lbry_files()
-        dl = []
-        for rowid, stream_hash, options in files_and_options:
-            dl.append(self.set_options_and_restore(rowid, stream_hash, options))
-        yield defer.DeferredList(dl)
+        if files_and_options:
+            for rowid, stream_hash, options in files_and_options:
+                yield self.set_options_and_restore(rowid, stream_hash, options)
         log.info("Started %i lbry files", len(self.lbry_files))
 
     @defer.inlineCallbacks

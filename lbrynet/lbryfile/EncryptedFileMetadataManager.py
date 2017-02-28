@@ -1,13 +1,9 @@
 import logging
-import sqlite3
 from twisted.internet import defer
 from zope.interface import implements
 from lbrynet.interfaces import IEncryptedFileMetadataManager
-from lbrynet.core.Error import DuplicateStreamHashError, NoSuchStreamHash
 from lbrynet.core import utils
-from lbrynet.core.sqlite_helpers import rerun_if_locked
 from lbrynet.core.Storage import MemoryStorage
-from lbrynet.lbryfilemanager.EncryptedFileDownloader import ManagedEncryptedFileDownloader
 
 
 log = logging.getLogger(__name__)

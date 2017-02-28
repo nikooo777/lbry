@@ -122,8 +122,13 @@ class EncryptedFileManager(object):
     @defer.inlineCallbacks
     def add_lbry_file(self, stream_hash, payment_rate_manager, blob_data_rate=None,
                       download_directory=None, file_name=None):
+        for lbry_file in self.lbry_files:
+            if lbry_file.stream_hash == stream_hash:
+                log.warning("A file for stream %s already exists", stream_hash)
+                defer.returnValue(lbry_file)
+
         rowid = yield self.storage.save_lbry_file(stream_hash, blob_data_rate)
-        log.info("Saved file %s", rowid)
+        log.info("Adding new file for stream %s", rowid)
         lbry_file = yield self.start_lbry_file(rowid, stream_hash, payment_rate_manager,
                                                blob_data_rate, download_directory,
                                                file_name)

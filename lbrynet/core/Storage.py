@@ -57,7 +57,8 @@ class MemoryStorage(object):
 
     @rerun_if_locked
     @defer.inlineCallbacks
-    def query(self, query, args=None):
+    def query(self, query, args=None, ignore_duplicate=True):
+
         if not self.is_open:
             yield self.open()
         query_str = query.replace("?", "%s")
@@ -69,8 +70,15 @@ class MemoryStorage(object):
                 result = yield self.sqlite_db.runQuery(query, args)
             else:
                 result = yield self.sqlite_db.runQuery(query)
+        except sqlite3.IntegrityError as err:
+            if err.message.startswith("UNIQUE constraint failed") and ignore_duplicate:
+                log.warning("Ignoring duplicate error")
+                result = None
+            else:
+                log.exception(query_str)
+                raise
         except:
-            log.error(query_str)
+            log.exception(query_str)
             raise
         log.debug(result)
         defer.returnValue(result)
@@ -189,7 +197,7 @@ class MemoryStorage(object):
     @defer.inlineCallbacks
     def get_blob_row_id(self, blob_hash):
         query_result = yield self.query("SELECT id FROM blobs WHERE blob_hash=?",
-                                           (blob_hash,))
+                                        (blob_hash,))
         blob_id = False
         if query_result:
             blob_id = query_result[0][0]
@@ -201,7 +209,6 @@ class MemoryStorage(object):
             add_managed_blob_query = ("INSERT INTO managed_blobs VALUES "
                                       "(?, NULL, NULL, NULL, NULL, NULL, NULL, NULL)")
             yield self.query(add_managed_blob_query, (blob_id, ))
-
         defer.returnValue(blob_id)
 
     # Metadata manager
@@ -210,7 +217,7 @@ class MemoryStorage(object):
     @defer.inlineCallbacks
     def delete_stream(self, stream_hash):
         query = "DELETE FROM files WHERE stream_hash=?"
-        yield self.query(query, (stream_hash))
+        yield self.query(query, (stream_hash, ))
 
     @defer.inlineCallbacks
     def store_stream(self, stream_hash, file_name, decryption_key, published_file_name):
@@ -389,7 +396,6 @@ class MemoryStorage(object):
             sd_hash = yield self.query("SELECT blob_hash FROM blobs WHERE id=?", sd_blob_id[0])
             if sd_hash:
                 results = [sd_hash[0][0]]
-        log.info("Got sd hash %s for %s", results, stream_hash)
         defer.returnValue(results)
 
     @defer.inlineCallbacks
